@@ -10,6 +10,20 @@ export class BootScene extends Phaser.Scene {
     this.makeFlipperTexture();
     this.makeDogTexture();
     this.makeStarTexture();
+    this.makeDeflectorTexture();
+  }
+
+  private makeDeflectorTexture() {
+    const g = this.add.graphics();
+    const r = 14;
+    g.fillStyle(BRAND.coral, 1);
+    g.fillCircle(r, r, r);
+    g.fillStyle(BRAND.yellow, 0.9);
+    g.fillCircle(r, r, r - 4);
+    g.lineStyle(2, BRAND.purpleDeep, 1);
+    g.strokeCircle(r, r, r);
+    g.generateTexture('deflector', r * 2, r * 2);
+    g.destroy();
   }
 
   create() {

@@ -6,9 +6,9 @@ const W = 540;
 const H = 860;
 const WALL = 18;
 const DRAIN_W = 180;
-const LANE_X = W - 56;        // x position of plunger lane wall
-const LANE_TOP = 90;          // top of lane wall (arc deflector above)
-const BALL_SPAWN_X = W - 32;
+const LANE_X = W - 80;        // left edge of plunger lane (wider channel)
+const LANE_TOP = 100;         // top of lane wall (deflector chain above)
+const BALL_SPAWN_X = W - 50;  // centered in 60-px-wide channel
 const BALL_SPAWN_Y = H - 60;
 
 type Bumper = Phaser.Physics.Arcade.Sprite & { points: number; flashUntil: number };
@@ -39,6 +39,7 @@ interface Flipper {
 export class GameScene extends Phaser.Scene {
   private ball!: Phaser.Physics.Arcade.Sprite;
   private bumpers!: Phaser.Physics.Arcade.StaticGroup;
+  private deflectorGroup!: Phaser.Physics.Arcade.StaticGroup;
   private flippers: Flipper[] = [];
   private leftKey!: Phaser.Input.Keyboard.Key;
   private rightKey!: Phaser.Input.Keyboard.Key;
@@ -146,21 +147,29 @@ export class GameScene extends Phaser.Scene {
     const wall = this.add.rectangle(LANE_X, LANE_TOP, 4, laneHeight, BRAND.teal, 0.9).setOrigin(0.5, 0);
     this.physics.add.existing(wall, true);
 
-    // Slanted ramp across the top: starts HIGH near the right wall (so the lane
-    // exit at top is mostly open), slopes DOWN-LEFT into the upper playfield.
-    // A launched ball rising out of the lane glances off the underside of this
-    // ramp and is redirected left into the bumpers.
-    const segments = 22;
-    const rampX1 = LANE_X - 6;        // right end, just above lane opening
-    const rampY1 = LANE_TOP + 6;       // high — barely below top wall
-    const rampX2 = WALL + 40;          // left end, near left wall
-    const rampY2 = LANE_TOP + 90;      // lower — slopes down to the left
+    // Circular deflectors above the lane opening. Circles (not rects) are
+    // critical here — they give angled collision normals so the launched ball
+    // glances LEFT into the playfield instead of bouncing straight back.
+    //
+    // Rightmost circle is positioned UP-AND-RIGHT of the ball's launch path so
+    // the ball hits its lower-left arc — collision normal points DOWN-LEFT,
+    // reflecting the ball mostly LEFT with a touch of UP. Chain continues
+    // sloping down-and-left across the upper playfield to keep deflecting on
+    // subsequent bounces.
+    this.deflectorGroup = this.physics.add.staticGroup();
+    const segments = 7;
+    const dx1 = W - 30;                // OVER and slightly right of spawn x
+    const dy1 = LANE_TOP - 50;         // above lane opening, below top wall
+    const dx2 = W / 2 - 20;            // ends near center top of playfield
+    const dy2 = LANE_TOP + 10;         // gently sloped down-left
     for (let i = 0; i <= segments; i++) {
       const t = i / segments;
-      const x = Phaser.Math.Linear(rampX1, rampX2, t);
-      const y = Phaser.Math.Linear(rampY1, rampY2, t);
-      const block = this.add.rectangle(x, y, 14, 14, BRAND.coral, 1);
-      this.physics.add.existing(block, true);
+      const x = Phaser.Math.Linear(dx1, dx2, t);
+      const y = Phaser.Math.Linear(dy1, dy2, t);
+      const c = this.deflectorGroup.create(x, y, 'deflector') as Phaser.Physics.Arcade.Sprite;
+      c.setCircle(14);
+      c.refreshBody();
+      c.setDepth(1);
     }
 
     // Plunger visual
@@ -247,10 +256,14 @@ export class GameScene extends Phaser.Scene {
     this.ball.setDepth(4);
     this.ball.setVelocity(0, 0);
 
-    // ball vs walls and bumpers — uses collider on every Arcade body in scene
+    // ball vs every static body in scene at this point
     this.physics.add.collider(this.ball, this.children.list.filter(
       (o) => (o as any).body && (o as any).body.physicsType === Phaser.Physics.Arcade.STATIC_BODY,
     ) as any);
+
+    // explicit colliders for groups (safer than the filter above for grouped bodies)
+    this.physics.add.collider(this.ball, this.deflectorGroup);
+    this.physics.add.collider(this.ball, this.bumpers);
 
     this.physics.add.overlap(this.ball, this.bumpers, (_b, bumper) => this.hitBumper(bumper as Bumper));
 
