@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { BRAND, PRODUCTS, TAGLINES } from '../brand';
+import { AUDIO } from '../audio';
 
 const W = 540;
 const H = 860;
@@ -31,7 +32,8 @@ interface Flipper {
   length: number;
   width: number;
   sprite: Phaser.GameObjects.Image;
-  active: boolean;
+  active: boolean;       // resolved each frame from inputs
+  pointerHeld: boolean;  // touch / mouse press state
 }
 
 export class GameScene extends Phaser.Scene {
@@ -144,20 +146,19 @@ export class GameScene extends Phaser.Scene {
     const wall = this.add.rectangle(LANE_X, LANE_TOP, 4, laneHeight, BRAND.teal, 0.9).setOrigin(0.5, 0);
     this.physics.add.existing(wall, true);
 
-    // Arc of small static blocks across the top of the lane, curving from the
-    // right wall down-and-left into the upper playfield. Steers a fast ball left.
-    const arcSegments = 14;
-    const startAngle = -Math.PI * 0.05;  // just below horizontal, near right wall
-    const endAngle = -Math.PI * 0.95;    // far left, just below top wall
-    const cx = W / 2;
-    const cy = LANE_TOP + 10;
-    const rx = W / 2 - WALL - 8;
-    const ry = 70;
-    for (let i = 0; i <= arcSegments; i++) {
-      const t = i / arcSegments;
-      const ang = Phaser.Math.Linear(startAngle, endAngle, t);
-      const x = cx + Math.cos(ang) * rx;
-      const y = cy + Math.sin(ang) * ry + ry; // shift so arc sits below top wall
+    // Slanted ramp across the top: starts HIGH near the right wall (so the lane
+    // exit at top is mostly open), slopes DOWN-LEFT into the upper playfield.
+    // A launched ball rising out of the lane glances off the underside of this
+    // ramp and is redirected left into the bumpers.
+    const segments = 22;
+    const rampX1 = LANE_X - 6;        // right end, just above lane opening
+    const rampY1 = LANE_TOP + 6;       // high — barely below top wall
+    const rampX2 = WALL + 40;          // left end, near left wall
+    const rampY2 = LANE_TOP + 90;      // lower — slopes down to the left
+    for (let i = 0; i <= segments; i++) {
+      const t = i / segments;
+      const x = Phaser.Math.Linear(rampX1, rampX2, t);
+      const y = Phaser.Math.Linear(rampY1, rampY2, t);
       const block = this.add.rectangle(x, y, 14, 14, BRAND.coral, 1);
       this.physics.add.existing(block, true);
     }
@@ -224,7 +225,12 @@ export class GameScene extends Phaser.Scene {
       const activeAngle = side === 'left' ? -0.55 : Math.PI + 0.55;
       const sprite = this.add.image(pivot.x, pivot.y, 'flipper').setOrigin(0.05, 0.5).setDepth(3);
       sprite.setRotation(restAngle);
-      return { pivot, side, restAngle, activeAngle, angle: restAngle, vAngle: 0, length: 90, width: 22, sprite, active: false };
+      return {
+        pivot, side, restAngle, activeAngle,
+        angle: restAngle, vAngle: 0,
+        length: 90, width: 22, sprite,
+        active: false, pointerHeld: false,
+      };
     };
 
     this.flippers.push(mk('left', leftPivot), mk('right', rightPivot));
@@ -261,35 +267,54 @@ export class GameScene extends Phaser.Scene {
     }).setOrigin(0.5).setAlpha(0.6).setDepth(-4);
   }
 
+  private leftArrow!: Phaser.Input.Keyboard.Key;
+  private rightArrow!: Phaser.Input.Keyboard.Key;
+
   private bindInput() {
     const kb = this.input.keyboard!;
     this.leftKey = kb.addKey(Phaser.Input.Keyboard.KeyCodes.Z);
     this.rightKey = kb.addKey(Phaser.Input.Keyboard.KeyCodes.M);
     this.spaceKey = kb.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
-    // alt keys
-    kb.addKey('LEFT').on('down', () => (this.flippers[0].active = true));
-    kb.addKey('LEFT').on('up', () => (this.flippers[0].active = false));
-    kb.addKey('RIGHT').on('down', () => (this.flippers[1].active = true));
-    kb.addKey('RIGHT').on('up', () => (this.flippers[1].active = false));
+    this.leftArrow = kb.addKey(Phaser.Input.Keyboard.KeyCodes.LEFT);
+    this.rightArrow = kb.addKey(Phaser.Input.Keyboard.KeyCodes.RIGHT);
 
     // touch / click — left half / right half
     this.input.on('pointerdown', (p: Phaser.Input.Pointer) => {
-      if (p.x < W / 2) this.flippers[0].active = true;
-      else this.flippers[1].active = true;
+      this.kickstartAudio();
+      if (p.x < W / 2) {
+        this.flippers[0].pointerHeld = true;
+        AUDIO.flipper();
+      } else {
+        this.flippers[1].pointerHeld = true;
+        AUDIO.flipper();
+      }
       if (this.ballInPlunger) this.charging = true;
     });
+    // flipper SFX on key down
+    this.leftKey.on('down', () => { this.kickstartAudio(); AUDIO.flipper(); });
+    this.rightKey.on('down', () => { this.kickstartAudio(); AUDIO.flipper(); });
+    this.leftArrow.on('down', () => { this.kickstartAudio(); AUDIO.flipper(); });
+    this.rightArrow.on('down', () => { this.kickstartAudio(); AUDIO.flipper(); });
+    this.spaceKey.on('down', () => this.kickstartAudio());
     this.input.on('pointerup', () => {
-      this.flippers[0].active = false;
-      this.flippers[1].active = false;
+      this.flippers[0].pointerHeld = false;
+      this.flippers[1].pointerHeld = false;
       if (this.ballInPlunger) this.releasePlunger();
+    });
+    // safety: clear on focus loss
+    this.input.on('gameout', () => {
+      this.flippers[0].pointerHeld = false;
+      this.flippers[1].pointerHeld = false;
     });
   }
 
   // ---------- update logic ----------
 
   private updateFlippers(dt: number) {
-    this.flippers[0].active = this.flippers[0].active || this.leftKey.isDown;
-    this.flippers[1].active = this.flippers[1].active || this.rightKey.isDown;
+    // Resolve active state from CURRENT key+pointer state each frame so the
+    // flipper drops the instant the user releases.
+    this.flippers[0].active = this.leftKey.isDown || this.leftArrow.isDown || this.flippers[0].pointerHeld;
+    this.flippers[1].active = this.rightKey.isDown || this.rightArrow.isDown || this.flippers[1].pointerHeld;
 
     this.flippers.forEach((f) => {
       const target = f.active ? f.activeAngle : f.restAngle;
@@ -382,6 +407,12 @@ export class GameScene extends Phaser.Scene {
     this.plungerPower = 0;
     this.charging = false;
     this.ballInPlunger = false;
+    AUDIO.launch();
+  }
+
+  private kickstartAudio() {
+    AUDIO.ensure();
+    AUDIO.startMusic();
   }
 
   private checkDrain() {
@@ -402,6 +433,7 @@ export class GameScene extends Phaser.Scene {
       this.ballsLeft -= 1;
       this.registry.set('balls', this.ballsLeft);
       this.flash(`BALL LOST — ${this.ballsLeft} LEFT`, BRAND.coral);
+      AUDIO.drain();
       if (this.ballsLeft <= 0) {
         this.endGame();
         return;
@@ -438,6 +470,7 @@ export class GameScene extends Phaser.Scene {
     this.addScore(bumper.points);
     this.popText(bumper.x, bumper.y - 28, `+${bumper.points}`, BRAND.cream);
     this.tweens.add({ targets: bumper, scale: { from: 1.25, to: 1 }, duration: 140 });
+    AUDIO.bumper();
   }
 
   private hitTarget(t: Target) {
@@ -447,6 +480,7 @@ export class GameScene extends Phaser.Scene {
     t.rect.setStrokeStyle(2, t.color);
     this.addScore(t.product.points);
     this.popText(t.rect.x, t.rect.y - 24, `${t.product.label}!`, t.color);
+    AUDIO.target();
 
     if (this.targets.every((x) => x.hit)) {
       this.completeMode();
@@ -458,6 +492,7 @@ export class GameScene extends Phaser.Scene {
     this.addScore(bonus);
     const mode = PRODUCTS[this.modeIdx].label;
     this.flash(`${mode.toUpperCase()} MODE — +${bonus}`, BRAND.yellow);
+    AUDIO.mode();
     // reset for next mode
     this.targets.forEach((t) => {
       t.hit = false;
@@ -511,6 +546,8 @@ export class GameScene extends Phaser.Scene {
     this.gameOver = true;
     this.ball.setVelocity(0, 0);
     this.ball.setVisible(false);
+    AUDIO.stopMusic();
+    AUDIO.gameOver();
 
     const overlay = this.add.rectangle(W / 2, H / 2, W, H, BRAND.purpleDeep, 0.85).setDepth(50);
     const title = this.add.text(W / 2, H / 2 - 60, 'GAME OVER', {
@@ -530,6 +567,7 @@ export class GameScene extends Phaser.Scene {
     const replay = () => {
       [overlay, title, sub, tag, btn].forEach((o) => o.destroy());
       this.resetGame();
+      AUDIO.startMusic();
     };
     this.spaceKey.once('down', replay);
     this.input.once('pointerdown', replay);

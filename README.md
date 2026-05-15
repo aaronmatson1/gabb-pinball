@@ -12,6 +12,7 @@ Web-based pinball arcade game branded for [Gabb Wireless](https://gabb.com). Bui
 - **Z / Left Arrow** — left flipper
 - **M / Right Arrow** — right flipper
 - **Space** — hold to charge plunger, release to launch
+- **X** — toggle sound
 - **Tap left/right** on touch screens
 
 Hit the four product targets (Watch, Phone, Music, Messenger) to complete a mode and score a 5,000-point bonus.

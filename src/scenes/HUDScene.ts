@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { BRAND } from '../brand';
+import { AUDIO } from '../audio';
 
 export class HUDScene extends Phaser.Scene {
   private scoreText!: Phaser.GameObjects.Text;
@@ -36,6 +37,22 @@ export class HUDScene extends Phaser.Scene {
     this.add.text(W / 2, this.scale.height - 12, 'Z / M = FLIPPERS  •  SPACE = LAUNCH  •  TAP SIDES ON TOUCH', {
       fontFamily: 'Press Start 2P, monospace', fontSize: '7px', color: '#FFF8F0',
     }).setOrigin(0.5, 1).setAlpha(0.55).setDepth(100);
+
+    // mute button
+    const muteBtn = this.add.text(W - 20, 55, '[SOUND ON]', {
+      fontFamily: 'Press Start 2P, monospace', fontSize: '8px', color: '#FFD23F',
+    }).setOrigin(1, 0).setDepth(100).setInteractive({ useHandCursor: true });
+    muteBtn.on('pointerdown', () => {
+      const muted = AUDIO.toggleMute();
+      muteBtn.setText(muted ? '[SOUND OFF]' : '[SOUND ON]');
+      muteBtn.setColor(muted ? '#FF5C8A' : '#FFD23F');
+    });
+    // M-key would conflict with right flipper, so use the keyboard shortcut "X"
+    this.input.keyboard?.addKey('X').on('down', () => {
+      const muted = AUDIO.toggleMute();
+      muteBtn.setText(muted ? '[SOUND OFF]' : '[SOUND ON]');
+      muteBtn.setColor(muted ? '#FF5C8A' : '#FFD23F');
+    });
 
     game.registry.events.on('changedata', (_p: unknown, key: string, val: unknown) => {
       if (key === 'score') this.scoreText.setText(`SCORE ${val}`);
