@@ -1,5 +1,97 @@
 const themeKey = 'lgl-vibe-theme';
 
+const DATA = {
+  meta: {
+    title: 'LGL Vibecoding',
+    subtitle: 'Things the old Little Giant marketing crew is building on the side',
+    updated: '2026-05-15'
+  },
+  sites: [
+    {
+      id: 'llpa-pinball',
+      title: 'Shark Tunnel Pinball',
+      url: 'https://llpa-pinball.netlify.app/',
+      tag: 'Game',
+      by: 'James',
+      audience: 'Loveland Living Planet Aquarium',
+      description: "Pinball adventure themed around the aquarium's Shark Tunnel — progress through ocean modes."
+    },
+    {
+      id: 'build-a-beast',
+      title: 'Build-A-Beast',
+      url: 'https://build-a-beast.netlify.app/',
+      tag: 'Interactive',
+      by: 'James',
+      audience: 'Loveland Living Planet Aquarium',
+      description: 'Configurator that lets visitors build and customize aquatic creatures.'
+    },
+    {
+      id: 'coloraquarium',
+      title: 'Color Aquarium',
+      url: 'https://coloraquarium.netlify.app/',
+      tag: 'Interactive',
+      by: 'James',
+      audience: 'Loveland Living Planet Aquarium',
+      description: 'Pick a fish, color it, set it free in a virtual aquarium.'
+    },
+    {
+      id: 'yes-yeti-pinball',
+      title: 'YES Yeti Pinball',
+      url: 'https://yes-yeti-pinball-v9bz.onrender.com',
+      tag: 'Game',
+      by: 'Marc',
+      audience: 'YES Staffing',
+      description: '3D React + Three.js Yeti pinball with a Retro-Tech Terminal aesthetic.'
+    },
+    {
+      id: 'nps-display',
+      title: 'NPS Display',
+      url: 'https://nps-display.netlify.app/',
+      tag: 'Dashboard',
+      by: 'James',
+      audience: 'NPS reporting',
+      description: 'Net Promoter Score visualization.'
+    },
+    {
+      id: 'heartfelt-swan',
+      title: 'Marketing Calendar',
+      url: 'https://heartfelt-swan-8265e2.netlify.app/',
+      tag: 'Tool',
+      by: 'James',
+      audience: 'Marketing team',
+      description: 'Calendar for planning campaigns and marketing activities.'
+    },
+    {
+      id: 'cmo-command-center',
+      title: 'CMO Command Center',
+      url: 'https://cmo-command-center.onrender.com/',
+      tag: 'Dashboard',
+      by: 'Marc',
+      audience: 'YES Staffing CMO',
+      description: "Marc's executive marketing command center — daily brief, KPIs, and approvals.",
+      credentials: { username: 'YES', password: 'christina' }
+    },
+    {
+      id: 'yes-design-system',
+      title: 'YES Design System',
+      url: 'https://yes-design-system.onrender.com/',
+      tag: 'Reference',
+      by: 'Marc',
+      audience: 'YES Staffing',
+      description: 'Brand tokens, components, and standards for YES — fonts, colors, six surfaces.'
+    },
+    {
+      id: 'csp-study',
+      title: 'CSP Study',
+      url: 'https://csp-study.onrender.com/dashboard.html',
+      tag: 'Personal',
+      by: 'Marc',
+      audience: 'CSP exam prep',
+      description: "Marc's 28-day Certified Staffing Professional exam prep system."
+    }
+  ]
+};
+
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   const btn = document.getElementById('theme-toggle');
@@ -49,24 +141,22 @@ function renderFilters(sites, current, onChange) {
   });
 }
 
-async function main() {
+function main() {
   initTheme();
   document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
 
-  const res = await fetch('sites.json');
-  const data = await res.json();
-  document.getElementById('subtitle').textContent = data.meta.subtitle;
-  document.getElementById('updated').textContent = `Updated ${data.meta.updated}`;
-  document.title = data.meta.title;
+  document.getElementById('subtitle').textContent = DATA.meta.subtitle;
+  document.getElementById('updated').textContent = `Updated ${DATA.meta.updated}`;
+  document.title = DATA.meta.title;
 
   let current = 'All';
   const onChange = (tag) => {
     current = tag;
-    renderFilters(data.sites, current, onChange);
-    renderCards(data.sites, current);
+    renderFilters(DATA.sites, current, onChange);
+    renderCards(DATA.sites, current);
   };
-  renderFilters(data.sites, current, onChange);
-  renderCards(data.sites, current);
+  renderFilters(DATA.sites, current, onChange);
+  renderCards(DATA.sites, current);
 }
 
 main();

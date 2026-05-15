@@ -4,7 +4,7 @@ A gallery for things the old Little Giant Ladders marketing crew is building on 
 
 ## Add a new site
 
-Edit `sites.json` and add an object to the `sites` array:
+Edit the `DATA.sites` array at the top of `app.js`:
 
 ```json
 {
