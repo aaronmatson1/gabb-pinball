@@ -4,7 +4,11 @@ import { BRAND, PRODUCTS, TAGLINES } from '../brand';
 const W = 540;
 const H = 860;
 const WALL = 18;
-const DRAIN_W = 130;
+const DRAIN_W = 180;
+const LANE_X = W - 56;        // x position of plunger lane wall
+const LANE_TOP = 90;          // top of lane wall (arc deflector above)
+const BALL_SPAWN_X = W - 32;
+const BALL_SPAWN_Y = H - 60;
 
 type Bumper = Phaser.Physics.Arcade.Sprite & { points: number; flashUntil: number };
 
@@ -134,24 +138,33 @@ export class GameScene extends Phaser.Scene {
   }
 
   private buildPlungerLane() {
-    // vertical channel on the right side, separated by a wall
-    const laneX = W - 56;
-    const wall = this.add.rectangle(laneX, H - 240, 4, 480, BRAND.teal, 0.9).setOrigin(0.5, 0);
+    // Vertical lane wall from near top of playfield down to bottom — keeps the
+    // launched ball channeled until it pops over the arc deflector at top.
+    const laneHeight = H - LANE_TOP + 40;
+    const wall = this.add.rectangle(LANE_X, LANE_TOP, 4, laneHeight, BRAND.teal, 0.9).setOrigin(0.5, 0);
     this.physics.add.existing(wall, true);
 
-    // top deflector to push ball back into play
-    const deflector = this.add.triangle(
-      laneX - 20, H - 250,
-      0, 0,
-      40, 0,
-      40, 30,
-      BRAND.pink, 1,
-    );
-    this.physics.add.existing(deflector, true);
+    // Arc of small static blocks across the top of the lane, curving from the
+    // right wall down-and-left into the upper playfield. Steers a fast ball left.
+    const arcSegments = 14;
+    const startAngle = -Math.PI * 0.05;  // just below horizontal, near right wall
+    const endAngle = -Math.PI * 0.95;    // far left, just below top wall
+    const cx = W / 2;
+    const cy = LANE_TOP + 10;
+    const rx = W / 2 - WALL - 8;
+    const ry = 70;
+    for (let i = 0; i <= arcSegments; i++) {
+      const t = i / arcSegments;
+      const ang = Phaser.Math.Linear(startAngle, endAngle, t);
+      const x = cx + Math.cos(ang) * rx;
+      const y = cy + Math.sin(ang) * ry + ry; // shift so arc sits below top wall
+      const block = this.add.rectangle(x, y, 14, 14, BRAND.coral, 1);
+      this.physics.add.existing(block, true);
+    }
 
-    // plunger visual
-    const plunger = this.add.rectangle(W - 36, H - 30, 32, 20, BRAND.yellow).setStrokeStyle(2, BRAND.coral);
-    plunger.setName('plunger');
+    // Plunger visual
+    this.add.rectangle(BALL_SPAWN_X, H - 28, 32, 22, BRAND.yellow).setStrokeStyle(2, BRAND.coral);
+    this.add.rectangle(BALL_SPAWN_X, H - 12, 36, 6, BRAND.coral);
   }
 
   private buildBumpers() {
@@ -352,26 +365,39 @@ export class GameScene extends Phaser.Scene {
     // hold space to charge
     if (this.spaceKey.isDown) {
       this.charging = true;
-      this.plungerPower = Math.min(this.plungerPower + dt * 900, 1100);
+      this.plungerPower = Math.min(this.plungerPower + dt * 1300, 1500);
     } else if (this.charging) {
       this.releasePlunger();
     }
     // hold ball in the lane
     this.ball.setVelocity(0, 0);
-    this.ball.x = W - 36;
-    this.ball.y = H - 60 + (this.plungerPower / 1100) * 8;
+    this.ball.x = BALL_SPAWN_X;
+    this.ball.y = BALL_SPAWN_Y + (this.plungerPower / 1500) * 10;
   }
 
   private releasePlunger() {
     if (!this.charging) return;
-    this.ball.setVelocity(0, -Math.max(this.plungerPower, 520));
+    // Min 900 ensures the ball clears the arc deflector at top of lane.
+    this.ball.setVelocity(0, -Math.max(this.plungerPower, 900));
     this.plungerPower = 0;
     this.charging = false;
     this.ballInPlunger = false;
   }
 
   private checkDrain() {
-    if (this.gameOver) return;
+    if (this.gameOver || this.ballInPlunger) return;
+
+    // If the ball is moving down inside the plunger lane (right of LANE_X), it
+    // never left the lane — treat as a free re-plunge instead of a drain.
+    if (
+      this.ball.x > LANE_X + 6 &&
+      this.ball.y > H - 120 &&
+      (this.ball.body?.velocity.y ?? 0) >= 0
+    ) {
+      this.respawnBall();
+      return;
+    }
+
     if (this.ball.y > H + 40 || this.ball.x < -40 || this.ball.x > W + 40) {
       this.ballsLeft -= 1;
       this.registry.set('balls', this.ballsLeft);
@@ -389,7 +415,7 @@ export class GameScene extends Phaser.Scene {
     this.charging = false;
     this.plungerPower = 0;
     this.ball.setVelocity(0, 0);
-    this.ball.setPosition(W - 36, H - 60);
+    this.ball.setPosition(BALL_SPAWN_X, BALL_SPAWN_Y);
   }
 
   // ---------- events ----------
