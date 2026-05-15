@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: lgl-vibecoding
+    runtime: static
+    buildCommand: ""
+    staticPublishPath: .
+    pullRequestPreviewsEnabled: false
+    headers:
+      - path: /*
+        name: X-Frame-Options
+        value: SAMEORIGIN
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*.json
+        name: Cache-Control
+        value: public, max-age=60
