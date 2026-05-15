@@ -54,6 +54,7 @@ export class GameScene extends Phaser.Scene {
   private ballsLeft = 3;
   private score = 0;
   private gameOver = false;
+  private launchKicked = false;
 
   constructor() { super('Game'); }
 
@@ -80,8 +81,32 @@ export class GameScene extends Phaser.Scene {
     this.updateFlippers(dt);
     this.handleFlipperBallCollision();
     this.updatePlunger(dt);
+    this.handleLaneExit();
     this.checkDrain();
     this.decayFlashes();
+  }
+
+  /**
+   * Real pinball machines use a curved launch tube that redirects an upward-
+   * traveling ball into the playfield. Arcade physics circle-vs-circle bounces
+   * are unreliable for this, so we just script the exit: once per launch, when
+   * the ball is still in the lane channel and crosses the top, swap its
+   * upward velocity for a leftward push.
+   */
+  private handleLaneExit() {
+    if (this.ballInPlunger || this.launchKicked || this.gameOver) return;
+    const inLane = this.ball.x > LANE_X + 6;
+    const atTop = this.ball.y < LANE_TOP + 30;
+    const goingUp = (this.ball.body?.velocity.y ?? 0) < 0;
+    if (inLane && atTop && goingUp) {
+      const vy = this.ball.body!.velocity.y;
+      const speed = Math.max(Math.abs(vy), 520);
+      // mostly LEFT (into playfield), small downward component so the ball
+      // settles into the bumper area instead of skimming along the top.
+      this.ball.setVelocity(-speed * 0.85, speed * 0.25);
+      this.launchKicked = true;
+      AUDIO.bumper();
+    }
   }
 
   // ---------- build ----------
@@ -147,30 +172,20 @@ export class GameScene extends Phaser.Scene {
     const wall = this.add.rectangle(LANE_X, LANE_TOP, 4, laneHeight, BRAND.teal, 0.9).setOrigin(0.5, 0);
     this.physics.add.existing(wall, true);
 
-    // Circular deflectors above the lane opening. Circles (not rects) are
-    // critical here — they give angled collision normals so the launched ball
-    // glances LEFT into the playfield instead of bouncing straight back.
-    //
-    // Rightmost circle is positioned UP-AND-RIGHT of the ball's launch path so
-    // the ball hits its lower-left arc — collision normal points DOWN-LEFT,
-    // reflecting the ball mostly LEFT with a touch of UP. Chain continues
-    // sloping down-and-left across the upper playfield to keep deflecting on
-    // subsequent bounces.
-    this.deflectorGroup = this.physics.add.staticGroup();
+    // Decorative arc above the lane — purely visual, no physics. Lane exit is
+    // handled by scripted kick in handleLaneExit() rather than collision.
     const segments = 7;
-    const dx1 = W - 30;                // OVER and slightly right of spawn x
-    const dy1 = LANE_TOP - 50;         // above lane opening, below top wall
-    const dx2 = W / 2 - 20;            // ends near center top of playfield
-    const dy2 = LANE_TOP + 10;         // gently sloped down-left
+    const dx1 = W - 30;
+    const dy1 = LANE_TOP - 50;
+    const dx2 = W / 2 - 20;
+    const dy2 = LANE_TOP + 10;
     for (let i = 0; i <= segments; i++) {
       const t = i / segments;
       const x = Phaser.Math.Linear(dx1, dx2, t);
       const y = Phaser.Math.Linear(dy1, dy2, t);
-      const c = this.deflectorGroup.create(x, y, 'deflector') as Phaser.Physics.Arcade.Sprite;
-      c.setCircle(14);
-      c.refreshBody();
-      c.setDepth(1);
+      this.add.image(x, y, 'deflector').setDepth(1).setAlpha(0.55);
     }
+    this.deflectorGroup = this.physics.add.staticGroup(); // empty placeholder
 
     // Plunger visual
     this.add.rectangle(BALL_SPAWN_X, H - 28, 32, 22, BRAND.yellow).setStrokeStyle(2, BRAND.coral);
@@ -415,11 +430,12 @@ export class GameScene extends Phaser.Scene {
 
   private releasePlunger() {
     if (!this.charging) return;
-    // Min 900 ensures the ball clears the arc deflector at top of lane.
+    // Min 900 ensures the ball reaches the top of the lane for the manual kick.
     this.ball.setVelocity(0, -Math.max(this.plungerPower, 900));
     this.plungerPower = 0;
     this.charging = false;
     this.ballInPlunger = false;
+    this.launchKicked = false;
     AUDIO.launch();
   }
 
@@ -459,6 +475,7 @@ export class GameScene extends Phaser.Scene {
     this.ballInPlunger = true;
     this.charging = false;
     this.plungerPower = 0;
+    this.launchKicked = false;
     this.ball.setVelocity(0, 0);
     this.ball.setPosition(BALL_SPAWN_X, BALL_SPAWN_Y);
   }
