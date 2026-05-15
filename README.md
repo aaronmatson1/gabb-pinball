@@ -4,6 +4,9 @@ Web-based pinball arcade game branded for [Gabb Wireless](https://gabb.com). Bui
 
 > Kids will be kids. Get a pinball machine that lets them.
 
+**▶ Play:** https://gabb-pinball.vercel.app
+**Source:** https://github.com/aaronmatson1/gabb-pinball
+
 ## Play
 
 - **Z / Left Arrow** — left flipper
