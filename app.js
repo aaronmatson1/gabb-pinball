@@ -159,4 +159,48 @@ function main() {
   renderCards(DATA.sites, current);
 }
 
-main();
+/* ---------- Gate ---------- */
+const GATE_HASH = '8a3573aca0b76d5df0ec3be2be9b9d6c10228d8e2be554b43f864fd01fc734b7';
+const UNLOCK_KEY = 'lgl-vibe-unlocked';
+
+async function sha256(str) {
+  const buf = new TextEncoder().encode(str);
+  const hash = await crypto.subtle.digest('SHA-256', buf);
+  return [...new Uint8Array(hash)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function reveal() {
+  document.getElementById('gate').hidden = true;
+  document.getElementById('shell').hidden = false;
+  main();
+}
+
+async function boot() {
+  if (localStorage.getItem(UNLOCK_KEY) === '1') {
+    reveal();
+    return;
+  }
+  const gate = document.getElementById('gate');
+  const form = document.getElementById('gate-form');
+  const input = document.getElementById('gate-input');
+  const err = document.getElementById('gate-error');
+
+  gate.hidden = false;
+  setTimeout(() => input.focus(), 50);
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const h = await sha256(input.value.trim().toLowerCase());
+    if (h === GATE_HASH) {
+      localStorage.setItem(UNLOCK_KEY, '1');
+      reveal();
+    } else {
+      err.hidden = false;
+      input.classList.add('shake');
+      input.select();
+      setTimeout(() => input.classList.remove('shake'), 400);
+    }
+  });
+}
+
+boot();

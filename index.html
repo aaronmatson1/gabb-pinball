@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex,nofollow" />
   <title>LGL Vibecoding</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -10,7 +11,19 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div class="shell">
+  <div class="gate" id="gate" hidden>
+    <div class="gate-card">
+      <h1 class="gate-title">LGL Vibecoding</h1>
+      <p class="gate-sub">For the crew. What's the word?</p>
+      <form class="gate-form" id="gate-form" autocomplete="off">
+        <input class="gate-input" id="gate-input" type="password" aria-label="Password" />
+        <button class="gate-submit" type="submit">Enter</button>
+      </form>
+      <p class="gate-error" id="gate-error" hidden>Nope.</p>
+    </div>
+  </div>
+
+  <div class="shell" id="shell" hidden>
     <header class="page-head">
       <div>
         <h1>LGL Vibecoding</h1>
