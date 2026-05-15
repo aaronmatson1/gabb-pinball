@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+    <title>Gabb Pinball — Safe Kids, Big Scores</title>
+    <meta name="description" content="A Gabb Wireless branded pinball arcade game." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Press+Start+2P&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        --gabb-purple: #5B2D91;
+        --gabb-deep: #1A0B3D;
+        --gabb-coral: #FF6B35;
+        --gabb-teal: #00C896;
+        --gabb-yellow: #FFD23F;
+        --gabb-cream: #FFF8F0;
+        --gabb-pink: #FF5C8A;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0; padding: 0; height: 100%;
+        background:
+          radial-gradient(ellipse at top, #3B1A6B 0%, var(--gabb-deep) 60%, #0a0420 100%);
+        font-family: 'Fredoka', system-ui, sans-serif;
+        color: var(--gabb-cream);
+        overflow: hidden;
+      }
+      #app {
+        display: flex; align-items: center; justify-content: center;
+        height: 100vh; width: 100vw;
+      }
+      #game {
+        box-shadow: 0 30px 90px rgba(0,0,0,0.6), 0 0 0 6px var(--gabb-purple),
+                    0 0 0 10px var(--gabb-yellow), 0 0 0 14px var(--gabb-coral);
+        border-radius: 14px;
+        overflow: hidden;
+      }
+      #loading {
+        position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+        font-family: 'Press Start 2P', monospace; color: var(--gabb-yellow);
+        font-size: 14px; letter-spacing: 2px; pointer-events: none;
+      }
+      .hidden { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="game"></div>
+    </div>
+    <div id="loading">LOADING GABB PINBALL…</div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
