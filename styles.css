@@ -134,6 +134,22 @@ header.page-head {
 }
 .theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
 
+.mascots {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin: 0 0 40px;
+  align-items: end;
+}
+.mascot {
+  width: 100%;
+  height: auto;
+  max-height: 420px;
+  object-fit: contain;
+  display: block;
+  border-radius: var(--radius-card);
+}
+
 .filter-bar {
   display: flex;
   flex-wrap: wrap;
@@ -291,6 +307,8 @@ footer {
   .grid { grid-template-columns: 1fr; gap: 16px; }
   .card { padding: 20px; }
   .card-title { font-size: 20px; }
+  .mascots { grid-template-columns: 1fr; gap: 16px; }
+  .mascot { max-height: 340px; }
 }
 
 /* ---------- Password gate ---------- */
