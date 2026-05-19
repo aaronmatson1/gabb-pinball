@@ -2,504 +2,430 @@ import Phaser from 'phaser';
 import { BRAND, PRODUCTS, TAGLINES } from '../brand';
 import { AUDIO } from '../audio';
 
+// Pull MatterJS root namespace from Phaser for body utilities.
+const MatterLib = (Phaser.Physics.Matter as any).Matter as typeof MatterJS;
+
 const W = 540;
 const H = 860;
-const WALL = 18;
-const DRAIN_W = 180;
-const LANE_X = W - 80;        // left edge of plunger lane (wider channel)
-const LANE_TOP = 100;         // top of lane wall (deflector chain above)
-const BALL_SPAWN_X = W - 50;  // centered in 60-px-wide channel
-const BALL_SPAWN_Y = H - 60;
-
-type Bumper = Phaser.Physics.Arcade.Sprite & { points: number; flashUntil: number };
-
-type Target = {
-  rect: Phaser.GameObjects.Rectangle;
-  body: Phaser.Physics.Arcade.StaticBody;
-  label: string;
-  color: number;
-  hit: boolean;
-  product: typeof PRODUCTS[number];
-};
+const WALL = 20;
+const LANE_W = 44;                  // width of plunger channel
+const LANE_X = W - WALL - LANE_W;   // inner-left edge of channel (lane wall x)
+const SPAWN_X = W - WALL - LANE_W / 2;
+const SPAWN_Y = H - 60;
+const FLIPPER_PIVOT_SPACING = 200;  // distance between left and right flipper pivots
+const FLIPPER_PIVOT_Y = H - 130;
 
 interface Flipper {
-  pivot: { x: number; y: number };
-  side: 'left' | 'right';
+  body: MatterJS.BodyType;
+  sprite: Phaser.Physics.Matter.Image;
+  side: 'L' | 'R';
   restAngle: number;
   activeAngle: number;
-  angle: number;
-  vAngle: number; // angular velocity (rad/s)
-  length: number;
-  width: number;
-  sprite: Phaser.GameObjects.Image;
-  active: boolean;       // resolved each frame from inputs
-  pointerHeld: boolean;  // touch / mouse press state
+  pressed: boolean;
+}
+
+interface Bumper {
+  body: MatterJS.BodyType;
+  sprite: Phaser.Physics.Matter.Image;
+  points: number;
+  flashUntil: number;
+}
+
+interface Target {
+  body: MatterJS.BodyType;
+  rect: Phaser.GameObjects.Rectangle;
+  product: typeof PRODUCTS[number];
+  hit: boolean;
 }
 
 export class GameScene extends Phaser.Scene {
-  private ball!: Phaser.Physics.Arcade.Sprite;
-  private bumpers!: Phaser.Physics.Arcade.StaticGroup;
-  private deflectorGroup!: Phaser.Physics.Arcade.StaticGroup;
+  private ball!: Phaser.Physics.Matter.Image;
   private flippers: Flipper[] = [];
-  private leftKey!: Phaser.Input.Keyboard.Key;
-  private rightKey!: Phaser.Input.Keyboard.Key;
-  private spaceKey!: Phaser.Input.Keyboard.Key;
-  private plungerPower = 0;
-  private charging = false;
+  private bumpers: Bumper[] = [];
   private targets: Target[] = [];
-  private modeIdx = 0;
-  private taglineText!: Phaser.GameObjects.Text;
-  private flashText?: Phaser.GameObjects.Text;
-  private ballInPlunger = true;
-  private ballsLeft = 3;
+
+  private keyZ!: Phaser.Input.Keyboard.Key;
+  private keyM!: Phaser.Input.Keyboard.Key;
+  private keyLeft!: Phaser.Input.Keyboard.Key;
+  private keyRight!: Phaser.Input.Keyboard.Key;
+  private keySpace!: Phaser.Input.Keyboard.Key;
+
+  private ballInLane = true;
+  private plungerCharge = 0;
+  private spaceCharging = false;
   private score = 0;
+  private balls = 3;
+  private modeIdx = 0;
   private gameOver = false;
-  private launchKicked = false;
+  private flashText?: Phaser.GameObjects.Text;
+  private taglineText!: Phaser.GameObjects.Text;
 
   constructor() { super('Game'); }
 
   create() {
-    this.cameras.main.setBackgroundColor(BRAND.purpleDeep);
-    this.drawPlayfieldArt();
+    // No matter world bounds — we build our own walls and want the ball to be
+    // able to drain off the bottom of the screen.
+    this.drawBackdrop();
     this.buildWalls();
-    this.buildPlungerLane();
+    this.buildLane();
     this.buildBumpers();
     this.buildTargets();
     this.buildFlippers();
     this.buildBall();
-    this.buildHUDFlavor();
+    this.buildFlavor();
     this.bindInput();
+    this.bindCollisions();
 
-    // expose to HUD
     this.registry.set('score', 0);
-    this.registry.set('balls', this.ballsLeft);
-    this.registry.set('mode', PRODUCTS[this.modeIdx].label);
+    this.registry.set('balls', this.balls);
+    this.registry.set('mode', PRODUCTS[0].label);
   }
 
   update(_t: number, dtMs: number) {
     const dt = dtMs / 1000;
-    this.updateFlippers(dt);
-    this.handleFlipperBallCollision();
+    this.updateFlippers();
     this.updatePlunger(dt);
-    this.handleLaneExit();
     this.checkDrain();
-    this.decayFlashes();
+    this.decayFlash();
   }
 
-  /**
-   * Real pinball machines use a curved launch tube that redirects an upward-
-   * traveling ball into the playfield. Arcade physics circle-vs-circle bounces
-   * are unreliable for this, so we just script the exit: once per launch, when
-   * the ball is still in the lane channel and crosses the top, swap its
-   * upward velocity for a leftward push.
-   */
-  private handleLaneExit() {
-    if (this.ballInPlunger || this.launchKicked || this.gameOver) return;
-    const inLane = this.ball.x > LANE_X + 6;
-    const atTop = this.ball.y < LANE_TOP + 30;
-    const goingUp = (this.ball.body?.velocity.y ?? 0) < 0;
-    if (inLane && atTop && goingUp) {
-      const vy = this.ball.body!.velocity.y;
-      const speed = Math.max(Math.abs(vy), 520);
-      // mostly LEFT (into playfield), small downward component so the ball
-      // settles into the bumper area instead of skimming along the top.
-      this.ball.setVelocity(-speed * 0.85, speed * 0.25);
-      this.launchKicked = true;
-      AUDIO.bumper();
-    }
+  // ---------------- build ----------------
+
+  private drawBackdrop() {
+    const overlay = this.add.rectangle(W / 2, H / 2, W, H, BRAND.purple, 0.15).setDepth(-10);
+    this.add.image(54, 70, 'dog').setScale(0.7).setAlpha(0.85).setDepth(-6);
+    this.add.image(W - 54, 70, 'dog').setScale(0.7).setFlipX(true).setAlpha(0.85).setDepth(-6);
+    this.add.text(W / 2, H - 24, 'GABB', {
+      fontFamily: 'Press Start 2P, monospace', fontSize: '22px', color: '#FFD23F',
+    }).setOrigin(0.5).setDepth(-5).setShadow(2, 2, '#FF6B35', 2, true, true);
+    overlay.setVisible(true);
   }
 
-  // ---------- build ----------
-
-  private drawPlayfieldArt() {
-    // playfield background gradient via stacked rects
-    const bgTop = this.add.rectangle(W / 2, H / 2, W, H, BRAND.purple).setAlpha(0.18);
-    bgTop.setDepth(-10);
-
-    // arc at top
-    const arc = this.add.graphics().setDepth(-9);
-    arc.lineStyle(4, BRAND.coral, 1);
-    arc.strokeCircle(W / 2, 0, W / 2 - 30);
-    arc.lineStyle(4, BRAND.teal, 1);
-    arc.strokeCircle(W / 2, 0, W / 2 - 70);
-
-    // brand badge center bottom
-    const badge = this.add.text(W / 2, H - 28, 'GABB', {
-      fontFamily: 'Press Start 2P, monospace',
-      fontSize: '22px',
-      color: '#FFD23F',
-    }).setOrigin(0.5).setDepth(-5);
-    badge.setShadow(2, 2, '#FF6B35', 2, true, true);
-
-    // decorative dogs in corners
-    this.add.image(48, 60, 'dog').setScale(0.7).setAlpha(0.85).setDepth(-6);
-    this.add.image(W - 48, 60, 'dog').setScale(0.7).setFlipX(true).setAlpha(0.85).setDepth(-6);
+  private staticWall(x: number, y: number, w: number, h: number, opts: { angle?: number; color?: number } = {}) {
+    const angle = opts.angle ?? 0;
+    const color = opts.color ?? BRAND.purpleLight;
+    const rect = this.add.rectangle(x, y, w, h, color, 1)
+      .setStrokeStyle(2, BRAND.yellow, 0.9)
+      .setDepth(0);
+    rect.setRotation(angle);
+    this.matter.add.gameObject(rect, {
+      isStatic: true,
+      angle,
+      friction: 0.02,
+      restitution: 0.4,
+      label: 'wall',
+    } as any);
+    return rect;
   }
 
   private buildWalls() {
-    const mkWall = (x: number, y: number, w: number, h: number) => {
-      const r = this.add.rectangle(x, y, w, h, BRAND.purpleLight, 1).setOrigin(0);
-      r.setStrokeStyle(2, BRAND.yellow, 0.9);
-      this.physics.add.existing(r, true);
-      return r;
-    };
-    mkWall(0, 0, WALL, H);             // left
-    mkWall(W - WALL, 0, WALL, H);      // right
-    mkWall(0, 0, W, WALL);             // top
+    // outer rectangle
+    this.staticWall(W / 2, WALL / 2, W, WALL);              // top
+    this.staticWall(WALL / 2, H / 2, WALL, H);              // left
+    this.staticWall(W - WALL / 2, H / 2, WALL, H);          // right
 
-    // bottom angled walls leading to drain
-    // create as static rectangles with rotation — arcade can't do rotated bodies,
-    // so we approximate with short stacked rects.
-    this.buildAngledWall({ x1: WALL, y1: H - 180, x2: (W - DRAIN_W) / 2 - 20, y2: H - 80, side: 'left' });
-    this.buildAngledWall({ x1: W - WALL, y1: H - 180, x2: W - (W - DRAIN_W) / 2 + 20, y2: H - 80, side: 'right' });
+    // Bottom angled funnels — these terminate at the flipper pivots so any ball
+    // landing in the lower playfield is funneled onto a flipper or into the
+    // central drain gap between flippers.
+    const fx = FLIPPER_PIVOT_SPACING / 2;     // half-spacing between flipper pivots
+    const flipperPx = W / 2 - fx;             // left pivot world x
+    const dx = flipperPx - WALL;              // horizontal run of left funnel
+    const dy = FLIPPER_PIVOT_Y - (H - 260);   // vertical run
+    const funnelLen = Math.hypot(dx, dy);
+    const funnelAngle = Math.atan2(dy, dx);   // positive slope
+    const leftCx = (WALL + flipperPx) / 2;
+    const leftCy = (H - 260 + FLIPPER_PIVOT_Y) / 2;
+    this.staticWall(leftCx, leftCy, funnelLen, 12, { angle: funnelAngle, color: BRAND.coral });
+    this.staticWall(W - leftCx, leftCy, funnelLen, 12, { angle: -funnelAngle, color: BRAND.coral });
   }
 
-  private buildAngledWall(opts: { x1: number; y1: number; x2: number; y2: number; side: 'left' | 'right' }) {
-    const segments = 14;
-    for (let i = 0; i < segments; i++) {
-      const t = i / segments;
-      const x = Phaser.Math.Linear(opts.x1, opts.x2, t);
-      const y = Phaser.Math.Linear(opts.y1, opts.y2, t);
-      const block = this.add.rectangle(x, y, 14, 14, BRAND.coral, 1);
-      this.physics.add.existing(block, true);
-    }
-  }
+  private buildLane() {
+    // vertical lane wall — left side of plunger channel
+    this.staticWall(LANE_X, H / 2 + 50, 6, H - 100, { color: BRAND.teal });
 
-  private buildPlungerLane() {
-    // Vertical lane wall from near top of playfield down to bottom — keeps the
-    // launched ball channeled until it pops over the arc deflector at top.
-    const laneHeight = H - LANE_TOP + 40;
-    const wall = this.add.rectangle(LANE_X, LANE_TOP, 4, laneHeight, BRAND.teal, 0.9).setOrigin(0.5, 0);
-    this.physics.add.existing(wall, true);
+    // Angled top deflector — the whole point of switching to Matter physics.
+    // Rotated rectangle with POSITIVE angle (\\ shape, tilted clockwise) so its
+    // underside faces down-LEFT. A ball launched up through the lane hits the
+    // underside; reflection sends it LEFT into the playfield naturally.
+    // The angle is what does the work — Matter computes proper rigid-body
+    // collision normals for rotated rectangles, unlike Arcade physics.
+    const defLen = 220;
+    const defAngle = Math.PI * 0.22;            // +40° clockwise (\\ shape)
+    const defCx = 470;
+    const defCy = 50;
+    this.staticWall(defCx, defCy, defLen, 14, { angle: defAngle, color: BRAND.coral });
 
-    // Decorative arc above the lane — purely visual, no physics. Lane exit is
-    // handled by scripted kick in handleLaneExit() rather than collision.
-    const segments = 7;
-    const dx1 = W - 30;
-    const dy1 = LANE_TOP - 50;
-    const dx2 = W / 2 - 20;
-    const dy2 = LANE_TOP + 10;
-    for (let i = 0; i <= segments; i++) {
-      const t = i / segments;
-      const x = Phaser.Math.Linear(dx1, dx2, t);
-      const y = Phaser.Math.Linear(dy1, dy2, t);
-      this.add.image(x, y, 'deflector').setDepth(1).setAlpha(0.55);
-    }
-    this.deflectorGroup = this.physics.add.staticGroup(); // empty placeholder
-
-    // Plunger visual
-    this.add.rectangle(BALL_SPAWN_X, H - 28, 32, 22, BRAND.yellow).setStrokeStyle(2, BRAND.coral);
-    this.add.rectangle(BALL_SPAWN_X, H - 12, 36, 6, BRAND.coral);
+    // plunger visual
+    this.add.rectangle(SPAWN_X, H - 28, LANE_W - 8, 22, BRAND.yellow).setStrokeStyle(2, BRAND.coral);
+    this.add.rectangle(SPAWN_X, H - 12, LANE_W - 2, 6, BRAND.coral);
   }
 
   private buildBumpers() {
-    this.bumpers = this.physics.add.staticGroup();
     const layout: Array<{ x: number; y: number; tex: string; points: number }> = [
-      { x: 150, y: 220, tex: 'bumper_coral', points: 100 },
-      { x: 300, y: 180, tex: 'bumper_teal', points: 100 },
-      { x: 420, y: 240, tex: 'bumper_yellow', points: 100 },
-      { x: 110, y: 360, tex: 'bumper_pink', points: 150 },
-      { x: 230, y: 320, tex: 'bumper_yellow', points: 150 },
-      { x: 360, y: 380, tex: 'bumper_coral', points: 150 },
-      { x: 180, y: 480, tex: 'bumper_teal', points: 200 },
-      { x: 320, y: 490, tex: 'bumper_pink', points: 200 },
+      { x: 130, y: 260, tex: 'bumper_coral', points: 100 },
+      { x: 270, y: 220, tex: 'bumper_teal', points: 100 },
+      { x: 380, y: 270, tex: 'bumper_yellow', points: 100 },
+      { x: 100, y: 380, tex: 'bumper_pink', points: 150 },
+      { x: 230, y: 360, tex: 'bumper_yellow', points: 150 },
+      { x: 340, y: 400, tex: 'bumper_coral', points: 150 },
+      { x: 170, y: 490, tex: 'bumper_teal', points: 200 },
+      { x: 320, y: 510, tex: 'bumper_pink', points: 200 },
     ];
     layout.forEach(({ x, y, tex, points }) => {
-      const s = this.bumpers.create(x, y, tex) as Bumper;
-      s.points = points;
-      s.flashUntil = 0;
-      s.setCircle(28);
-      s.refreshBody();
+      const sprite = this.matter.add.image(x, y, tex, undefined, {
+        shape: { type: 'circle', radius: 28 } as any,
+        isStatic: true,
+        restitution: 1.4,
+        friction: 0,
+        label: 'bumper',
+      });
+      this.bumpers.push({ body: sprite.body as MatterJS.BodyType, sprite, points, flashUntil: 0 });
     });
   }
 
   private buildTargets() {
-    // four product targets along upper sides
     const slots = [
-      { x: 60, y: 600, label: PRODUCTS[0].label, color: PRODUCTS[0].color, product: PRODUCTS[0] },
-      { x: 60, y: 540, label: PRODUCTS[1].label, color: PRODUCTS[1].color, product: PRODUCTS[1] },
-      { x: W - 80, y: 600, label: PRODUCTS[2].label, color: PRODUCTS[2].color, product: PRODUCTS[2] },
-      { x: W - 80, y: 540, label: PRODUCTS[3].label, color: PRODUCTS[3].color, product: PRODUCTS[3] },
+      { x: 60, y: 600, product: PRODUCTS[0] },
+      { x: 60, y: 560, product: PRODUCTS[1] },
+      { x: W - 80, y: 600, product: PRODUCTS[2] },
+      { x: W - 80, y: 560, product: PRODUCTS[3] },
     ];
     slots.forEach((s) => {
-      const r = this.add.rectangle(s.x, s.y, 50, 22, s.color, 1).setStrokeStyle(2, BRAND.cream);
-      this.physics.add.existing(r, true);
-      const t: Target = {
-        rect: r,
-        body: r.body as Phaser.Physics.Arcade.StaticBody,
-        label: s.label,
-        color: s.color,
-        hit: false,
-        product: s.product,
-      };
-      this.targets.push(t);
+      const rect = this.add.rectangle(s.x, s.y, 52, 22, s.product.color, 1).setStrokeStyle(2, BRAND.cream);
+      this.matter.add.gameObject(rect, {
+        isStatic: true,
+        restitution: 0.6,
+        label: 'target',
+      } as any);
       this.add.text(s.x, s.y, s.product.key, {
         fontFamily: 'Press Start 2P, monospace', fontSize: '8px', color: '#1A0B3D',
       }).setOrigin(0.5).setDepth(2);
+      this.targets.push({
+        body: (rect as any).body as MatterJS.BodyType,
+        rect,
+        product: s.product,
+        hit: false,
+      });
     });
   }
 
   private buildFlippers() {
-    const y = H - 100;
-    const leftPivot = { x: (W - DRAIN_W) / 2 - 20, y };
-    const rightPivot = { x: W - (W - DRAIN_W) / 2 + 20, y };
+    const length = 96;
+    const halfBody = length / 2;
+    const pivotInset = 12;        // distance from end of body to pivot
+    const leftPivot = { x: W / 2 - FLIPPER_PIVOT_SPACING / 2, y: FLIPPER_PIVOT_Y };
+    const rightPivot = { x: W / 2 + FLIPPER_PIVOT_SPACING / 2, y: FLIPPER_PIVOT_Y };
 
-    const mk = (side: 'left' | 'right', pivot: { x: number; y: number }): Flipper => {
-      const restAngle = side === 'left' ? 0.45 : Math.PI - 0.45;
-      const activeAngle = side === 'left' ? -0.55 : Math.PI + 0.55;
-      const sprite = this.add.image(pivot.x, pivot.y, 'flipper').setOrigin(0.05, 0.5).setDepth(3);
-      sprite.setRotation(restAngle);
-      return {
-        pivot, side, restAngle, activeAngle,
-        angle: restAngle, vAngle: 0,
-        length: 90, width: 22, sprite,
-        active: false, pointerHeld: false,
-      };
+    const buildOne = (side: 'L' | 'R', pivot: { x: number; y: number }) => {
+      const isLeft = side === 'L';
+      // Both flippers point downward-toward-center at rest.
+      // Left  flipper: pivot at LEFT end, rest tilts down-right  → angle  = +28°
+      // Right flipper: pivot at RIGHT end, rest tilts down-left  → angle  = -28°
+      const restAngle = Phaser.Math.DegToRad(isLeft ? 28 : -28);
+      const activeAngle = Phaser.Math.DegToRad(isLeft ? -32 : 32);
+      // Body-local x of the pivot (relative to body center).
+      // Left flipper: pivot is at the LEFT end of the body, so local x = -(halfBody - inset)
+      // Right flipper: pivot is at the RIGHT end, so local x = +(halfBody - inset)
+      const pivotOffset = (isLeft ? -1 : 1) * (halfBody - pivotInset);
+      // Position body center so that the pivot end lands exactly on the world pivot point at rest.
+      const cx = pivot.x - Math.cos(restAngle) * pivotOffset;
+      const cy = pivot.y - Math.sin(restAngle) * pivotOffset;
+
+      const sprite = this.matter.add.image(cx, cy, 'flipper', undefined, {
+        shape: { type: 'rectangle', width: length, height: 22 } as any,
+        density: 0.01,
+        friction: 0,
+        frictionAir: 0.04,
+        restitution: 0.2,
+        label: 'flipper',
+      });
+      sprite.setAngle(Phaser.Math.RadToDeg(restAngle));
+      MatterLib.Body.setAngle(sprite.body as any, restAngle);
+
+      // Pin the inner end to the world pivot point with a stiff constraint.
+      this.matter.add.constraint(sprite.body as any, undefined as any, 0, 1, {
+        pointA: { x: pivot.x, y: pivot.y },
+        pointB: { x: pivotOffset, y: 0 },
+        length: 0,
+        stiffness: 1,
+      } as any);
+
+      this.flippers.push({
+        body: sprite.body as MatterJS.BodyType,
+        sprite,
+        side,
+        restAngle,
+        activeAngle,
+        pressed: false,
+      });
     };
 
-    this.flippers.push(mk('left', leftPivot), mk('right', rightPivot));
+    buildOne('L', leftPivot);
+    buildOne('R', rightPivot);
   }
 
   private buildBall() {
-    this.ball = this.physics.add.sprite(W - 36, H - 60, 'ball');
-    this.ball.setCircle(12);
-    this.ball.setBounce(0.78);
-    this.ball.setCollideWorldBounds(false);
-    this.ball.setMaxVelocity(900, 1400);
-    this.ball.setDamping(true);
-    this.ball.setDrag(0.999, 0.999);
-    this.ball.setDepth(4);
-    this.ball.setVelocity(0, 0);
-
-    // ball vs every static body in scene at this point
-    this.physics.add.collider(this.ball, this.children.list.filter(
-      (o) => (o as any).body && (o as any).body.physicsType === Phaser.Physics.Arcade.STATIC_BODY,
-    ) as any);
-
-    // explicit colliders for groups (safer than the filter above for grouped bodies)
-    this.physics.add.collider(this.ball, this.deflectorGroup);
-    this.physics.add.collider(this.ball, this.bumpers);
-
-    this.physics.add.overlap(this.ball, this.bumpers, (_b, bumper) => this.hitBumper(bumper as Bumper));
-
-    this.targets.forEach((t) => {
-      this.physics.add.overlap(this.ball, t.rect, () => this.hitTarget(t));
+    const img = this.matter.add.image(SPAWN_X, SPAWN_Y, 'ball', undefined, {
+      shape: { type: 'circle', radius: 12 } as any,
+      density: 0.004,
+      restitution: 0.55,
+      friction: 0.005,
+      frictionAir: 0.002,
+      label: 'ball',
     });
+    img.setDepth(5);
+    this.ball = img;
   }
 
-  private buildHUDFlavor() {
-    this.taglineText = this.add.text(W / 2, H - 70, TAGLINES[0], {
+  private buildFlavor() {
+    this.taglineText = this.add.text(W / 2, H - 60, TAGLINES[0], {
       fontFamily: 'Press Start 2P, monospace',
       fontSize: '10px',
       color: '#FFF8F0',
-    }).setOrigin(0.5).setAlpha(0.6).setDepth(-4);
+    }).setOrigin(0.5).setAlpha(0.55).setDepth(-4);
   }
 
-  private leftArrow!: Phaser.Input.Keyboard.Key;
-  private rightArrow!: Phaser.Input.Keyboard.Key;
+  // ---------------- input ----------------
 
   private bindInput() {
     const kb = this.input.keyboard!;
-    this.leftKey = kb.addKey(Phaser.Input.Keyboard.KeyCodes.Z);
-    this.rightKey = kb.addKey(Phaser.Input.Keyboard.KeyCodes.M);
-    this.spaceKey = kb.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
-    this.leftArrow = kb.addKey(Phaser.Input.Keyboard.KeyCodes.LEFT);
-    this.rightArrow = kb.addKey(Phaser.Input.Keyboard.KeyCodes.RIGHT);
+    this.keyZ = kb.addKey('Z');
+    this.keyM = kb.addKey('M');
+    this.keyLeft = kb.addKey('LEFT');
+    this.keyRight = kb.addKey('RIGHT');
+    this.keySpace = kb.addKey('SPACE');
 
-    // touch / click — left half / right half
+    this.keyZ.on('down', () => { this.kickAudio(); AUDIO.flipper(); });
+    this.keyM.on('down', () => { this.kickAudio(); AUDIO.flipper(); });
+    this.keyLeft.on('down', () => { this.kickAudio(); AUDIO.flipper(); });
+    this.keyRight.on('down', () => { this.kickAudio(); AUDIO.flipper(); });
+    this.keySpace.on('down', () => this.kickAudio());
+
     this.input.on('pointerdown', (p: Phaser.Input.Pointer) => {
-      this.kickstartAudio();
-      if (p.x < W / 2) {
-        this.flippers[0].pointerHeld = true;
-        AUDIO.flipper();
-      } else {
-        this.flippers[1].pointerHeld = true;
-        AUDIO.flipper();
+      this.kickAudio();
+      if (this.ballInLane) {
+        this.spaceCharging = true;
+        return;
       }
-      if (this.ballInPlunger) this.charging = true;
+      if (p.x < W / 2) this.flippers[0].pressed = true;
+      else this.flippers[1].pressed = true;
+      AUDIO.flipper();
     });
-    // flipper SFX on key down
-    this.leftKey.on('down', () => { this.kickstartAudio(); AUDIO.flipper(); });
-    this.rightKey.on('down', () => { this.kickstartAudio(); AUDIO.flipper(); });
-    this.leftArrow.on('down', () => { this.kickstartAudio(); AUDIO.flipper(); });
-    this.rightArrow.on('down', () => { this.kickstartAudio(); AUDIO.flipper(); });
-    this.spaceKey.on('down', () => this.kickstartAudio());
     this.input.on('pointerup', () => {
-      this.flippers[0].pointerHeld = false;
-      this.flippers[1].pointerHeld = false;
-      if (this.ballInPlunger) this.releasePlunger();
-    });
-    // safety: clear on focus loss
-    this.input.on('gameout', () => {
-      this.flippers[0].pointerHeld = false;
-      this.flippers[1].pointerHeld = false;
+      this.flippers[0].pressed = false;
+      this.flippers[1].pressed = false;
+      if (this.ballInLane && this.spaceCharging) this.fire();
     });
   }
 
-  // ---------- update logic ----------
-
-  private updateFlippers(dt: number) {
-    // Resolve active state from CURRENT key+pointer state each frame so the
-    // flipper drops the instant the user releases.
-    this.flippers[0].active = this.leftKey.isDown || this.leftArrow.isDown || this.flippers[0].pointerHeld;
-    this.flippers[1].active = this.rightKey.isDown || this.rightArrow.isDown || this.flippers[1].pointerHeld;
-
-    this.flippers.forEach((f) => {
-      const target = f.active ? f.activeAngle : f.restAngle;
-      const speed = f.active ? 28 : 16; // rad/s desired
-      const diff = target - f.angle;
-      f.vAngle = Phaser.Math.Clamp(diff * speed, -40, 40);
-      f.angle += f.vAngle * dt;
-      // clamp
-      const min = Math.min(f.restAngle, f.activeAngle);
-      const max = Math.max(f.restAngle, f.activeAngle);
-      f.angle = Phaser.Math.Clamp(f.angle, min, max);
-      f.sprite.setRotation(f.angle);
-    });
-  }
-
-  private handleFlipperBallCollision() {
-    const ballR = 12;
-    const ballPos = new Phaser.Math.Vector2(this.ball.x, this.ball.y);
-
-    this.flippers.forEach((f) => {
-      // tip position
-      const tip = new Phaser.Math.Vector2(
-        f.pivot.x + Math.cos(f.angle) * f.length,
-        f.pivot.y + Math.sin(f.angle) * f.length,
-      );
-      const a = new Phaser.Math.Vector2(f.pivot.x, f.pivot.y);
-      const b = tip;
-      const closest = closestPointOnSegment(a, b, ballPos);
-      const dx = ballPos.x - closest.x;
-      const dy = ballPos.y - closest.y;
-      const dist = Math.hypot(dx, dy);
-      const minDist = ballR + f.width / 2 - 3;
-      if (dist < minDist && dist > 0.0001) {
-        // push ball out
-        const nx = dx / dist;
-        const ny = dy / dist;
-        const overlap = minDist - dist;
-        this.ball.x += nx * overlap;
-        this.ball.y += ny * overlap;
-
-        const v = this.ball.body!.velocity;
-        const dot = v.x * nx + v.y * ny;
-        if (dot < 0) {
-          // reflect
-          const bounceMul = 1.05;
-          v.x = (v.x - 2 * dot * nx) * bounceMul;
-          v.y = (v.y - 2 * dot * ny) * bounceMul;
+  private bindCollisions() {
+    this.matter.world.on('collisionstart', (event: any) => {
+      for (const pair of event.pairs) {
+        const a = pair.bodyA, b = pair.bodyB;
+        const labels = [a.label, b.label];
+        if (labels.includes('ball') && labels.includes('bumper')) {
+          const bumperBody = a.label === 'bumper' ? a : b;
+          const bumper = this.bumpers.find((bm) => bm.body === bumperBody);
+          if (bumper) this.hitBumper(bumper);
+        } else if (labels.includes('ball') && labels.includes('target')) {
+          const targetBody = a.label === 'target' ? a : b;
+          const target = this.targets.find((t) => t.body === targetBody);
+          if (target) this.hitTarget(target);
+        } else if (labels.includes('ball') && labels.includes('flipper')) {
+          AUDIO.flipper();
         }
-
-        // add flipper kick when active and moving
-        if (f.active && Math.abs(f.vAngle) > 1) {
-          // point on flipper relative to pivot
-          const rx = closest.x - f.pivot.x;
-          const ry = closest.y - f.pivot.y;
-          // tangential velocity = ω × r  (2D: vt = (-ry, rx) * ω)
-          const omega = f.vAngle;
-          const vtx = -ry * omega;
-          const vty = rx * omega;
-          v.x += vtx * 0.6 + nx * 220;
-          v.y += vty * 0.6 + ny * 220;
-        }
-
-        this.ball.setVelocity(
-          Phaser.Math.Clamp(v.x, -900, 900),
-          Phaser.Math.Clamp(v.y, -1400, 1400),
-        );
       }
     });
+  }
+
+  // ---------------- update ----------------
+
+  private updateFlippers() {
+    const leftPressed = this.keyZ.isDown || this.keyLeft.isDown || this.flippers[0].pressed;
+    const rightPressed = this.keyM.isDown || this.keyRight.isDown || this.flippers[1].pressed;
+
+    this.applyFlipper(this.flippers[0], leftPressed);
+    this.applyFlipper(this.flippers[1], rightPressed);
+  }
+
+  private applyFlipper(f: Flipper, pressed: boolean) {
+    const target = pressed ? f.activeAngle : f.restAngle;
+    const body = f.body as any;
+    const current = body.angle;
+    // proportional angular velocity toward target, clamped
+    const diff = target - current;
+    const speed = pressed ? 0.9 : 0.55;
+    let v = diff * speed * 10;
+    v = Phaser.Math.Clamp(v, -1.6, 1.6);
+    MatterLib.Body.setAngularVelocity(body, v);
+
+    // hard clamp once arrived
+    const minA = Math.min(f.restAngle, f.activeAngle);
+    const maxA = Math.max(f.restAngle, f.activeAngle);
+    if (body.angle < minA) { MatterLib.Body.setAngle(body, minA); MatterLib.Body.setAngularVelocity(body, 0); }
+    if (body.angle > maxA) { MatterLib.Body.setAngle(body, maxA); MatterLib.Body.setAngularVelocity(body, 0); }
   }
 
   private updatePlunger(dt: number) {
-    if (!this.ballInPlunger) return;
-    // hold space to charge
-    if (this.spaceKey.isDown) {
-      this.charging = true;
-      this.plungerPower = Math.min(this.plungerPower + dt * 1300, 1500);
-    } else if (this.charging) {
-      this.releasePlunger();
+    if (!this.ballInLane) return;
+
+    // hold ball in place in the lane
+    MatterLib.Body.setPosition(this.ball.body as any, {
+      x: SPAWN_X,
+      y: SPAWN_Y + (this.plungerCharge / 1.0) * 10,
+    });
+    MatterLib.Body.setVelocity(this.ball.body as any, { x: 0, y: 0 });
+    MatterLib.Body.setAngularVelocity(this.ball.body as any, 0);
+
+    if (this.keySpace.isDown) {
+      this.spaceCharging = true;
+      this.plungerCharge = Math.min(this.plungerCharge + dt * 1.5, 1.0);
+    } else if (this.spaceCharging) {
+      this.fire();
     }
-    // hold ball in the lane
-    this.ball.setVelocity(0, 0);
-    this.ball.x = BALL_SPAWN_X;
-    this.ball.y = BALL_SPAWN_Y + (this.plungerPower / 1500) * 10;
   }
 
-  private releasePlunger() {
-    if (!this.charging) return;
-    // Min 900 ensures the ball reaches the top of the lane for the manual kick.
-    this.ball.setVelocity(0, -Math.max(this.plungerPower, 900));
-    this.plungerPower = 0;
-    this.charging = false;
-    this.ballInPlunger = false;
-    this.launchKicked = false;
+  private fire() {
+    const power = Math.max(this.plungerCharge, 0.55);    // 0..1
+    const v = -18 - power * 12;                            // -18..-30 (matter units)
+    MatterLib.Body.setVelocity(this.ball.body as any, { x: 0, y: v });
+    this.plungerCharge = 0;
+    this.spaceCharging = false;
+    this.ballInLane = false;
     AUDIO.launch();
   }
 
-  private kickstartAudio() {
-    AUDIO.ensure();
-    AUDIO.startMusic();
-  }
-
   private checkDrain() {
-    if (this.gameOver || this.ballInPlunger) return;
-
-    // If the ball is moving down inside the plunger lane (right of LANE_X), it
-    // never left the lane — treat as a free re-plunge instead of a drain.
-    if (
-      this.ball.x > LANE_X + 6 &&
-      this.ball.y > H - 120 &&
-      (this.ball.body?.velocity.y ?? 0) >= 0
-    ) {
-      this.respawnBall();
-      return;
-    }
-
-    if (this.ball.y > H + 40 || this.ball.x < -40 || this.ball.x > W + 40) {
-      this.ballsLeft -= 1;
-      this.registry.set('balls', this.ballsLeft);
-      this.flash(`BALL LOST — ${this.ballsLeft} LEFT`, BRAND.coral);
+    if (this.gameOver || this.ballInLane) return;
+    const y = (this.ball.body as any).position.y;
+    const x = (this.ball.body as any).position.x;
+    if (y > H + 30 || x < -30 || x > W + 30) {
+      this.balls -= 1;
+      this.registry.set('balls', this.balls);
+      this.flash(`BALL LOST — ${this.balls} LEFT`, BRAND.coral);
       AUDIO.drain();
-      if (this.ballsLeft <= 0) {
-        this.endGame();
-        return;
-      }
-      this.respawnBall();
+      if (this.balls <= 0) { this.endGame(); return; }
+      this.respawn();
     }
   }
 
-  private respawnBall() {
-    this.ballInPlunger = true;
-    this.charging = false;
-    this.plungerPower = 0;
-    this.launchKicked = false;
-    this.ball.setVelocity(0, 0);
-    this.ball.setPosition(BALL_SPAWN_X, BALL_SPAWN_Y);
+  private respawn() {
+    this.ballInLane = true;
+    this.plungerCharge = 0;
+    this.spaceCharging = false;
+    MatterLib.Body.setPosition(this.ball.body as any, { x: SPAWN_X, y: SPAWN_Y });
+    MatterLib.Body.setVelocity(this.ball.body as any, { x: 0, y: 0 });
   }
 
-  // ---------- events ----------
+  // ---------------- events ----------------
 
-  private hitBumper(bumper: Bumper) {
+  private hitBumper(b: Bumper) {
     const now = this.time.now;
-    if (now < bumper.flashUntil) return;
-    bumper.flashUntil = now + 80;
-
-    const dx = this.ball.x - bumper.x;
-    const dy = this.ball.y - bumper.y;
-    const d = Math.hypot(dx, dy) || 1;
-    const nx = dx / d, ny = dy / d;
-    const kick = 380;
-    const v = this.ball.body!.velocity;
-    v.x = nx * kick + v.x * 0.2;
-    v.y = ny * kick + v.y * 0.2;
-    this.ball.setVelocity(v.x, v.y);
-
-    this.addScore(bumper.points);
-    this.popText(bumper.x, bumper.y - 28, `+${bumper.points}`, BRAND.cream);
-    this.tweens.add({ targets: bumper, scale: { from: 1.25, to: 1 }, duration: 140 });
+    if (now < b.flashUntil) return;
+    b.flashUntil = now + 60;
+    this.addScore(b.points);
+    this.popText(b.sprite.x, b.sprite.y - 28, `+${b.points}`, BRAND.cream);
+    this.tweens.add({ targets: b.sprite, scale: { from: 1.25, to: 1 }, duration: 140 });
     AUDIO.bumper();
   }
 
@@ -507,26 +433,21 @@ export class GameScene extends Phaser.Scene {
     if (t.hit) return;
     t.hit = true;
     t.rect.setFillStyle(BRAND.purpleDeep, 1);
-    t.rect.setStrokeStyle(2, t.color);
+    t.rect.setStrokeStyle(2, t.product.color);
     this.addScore(t.product.points);
-    this.popText(t.rect.x, t.rect.y - 24, `${t.product.label}!`, t.color);
+    this.popText(t.rect.x, t.rect.y - 24, `${t.product.label}!`, t.product.color);
     AUDIO.target();
-
-    if (this.targets.every((x) => x.hit)) {
-      this.completeMode();
-    }
+    if (this.targets.every((x) => x.hit)) this.completeMode();
   }
 
   private completeMode() {
     const bonus = 5000;
     this.addScore(bonus);
-    const mode = PRODUCTS[this.modeIdx].label;
-    this.flash(`${mode.toUpperCase()} MODE — +${bonus}`, BRAND.yellow);
+    this.flash(`${PRODUCTS[this.modeIdx].label.toUpperCase()} MODE — +${bonus}`, BRAND.yellow);
     AUDIO.mode();
-    // reset for next mode
     this.targets.forEach((t) => {
       t.hit = false;
-      t.rect.setFillStyle(t.color, 1);
+      t.rect.setFillStyle(t.product.color, 1);
       t.rect.setStrokeStyle(2, BRAND.cream);
     });
     this.modeIdx = (this.modeIdx + 1) % PRODUCTS.length;
@@ -541,32 +462,22 @@ export class GameScene extends Phaser.Scene {
 
   private popText(x: number, y: number, msg: string, color: number) {
     const t = this.add.text(x, y, msg, {
-      fontFamily: 'Press Start 2P, monospace',
-      fontSize: '10px',
+      fontFamily: 'Press Start 2P, monospace', fontSize: '10px',
       color: '#' + color.toString(16).padStart(6, '0'),
     }).setOrigin(0.5).setDepth(10);
-    this.tweens.add({
-      targets: t, y: y - 30, alpha: 0, duration: 700,
-      onComplete: () => t.destroy(),
-    });
+    this.tweens.add({ targets: t, y: y - 30, alpha: 0, duration: 700, onComplete: () => t.destroy() });
   }
 
   private flash(msg: string, color: number) {
     this.flashText?.destroy();
     this.flashText = this.add.text(W / 2, H / 2 - 80, msg, {
-      fontFamily: 'Press Start 2P, monospace',
-      fontSize: '14px',
-      color: '#' + color.toString(16).padStart(6, '0'),
-      align: 'center',
+      fontFamily: 'Press Start 2P, monospace', fontSize: '14px',
+      color: '#' + color.toString(16).padStart(6, '0'), align: 'center',
     }).setOrigin(0.5).setDepth(20);
-    this.tweens.add({
-      targets: this.flashText,
-      scale: { from: 1.4, to: 1 },
-      duration: 200,
-    });
+    this.tweens.add({ targets: this.flashText, scale: { from: 1.4, to: 1 }, duration: 200 });
   }
 
-  private decayFlashes() {
+  private decayFlash() {
     if (!this.flashText) return;
     this.flashText.alpha -= 0.005;
     if (this.flashText.alpha <= 0) { this.flashText.destroy(); this.flashText = undefined; }
@@ -574,57 +485,45 @@ export class GameScene extends Phaser.Scene {
 
   private endGame() {
     this.gameOver = true;
-    this.ball.setVelocity(0, 0);
-    this.ball.setVisible(false);
     AUDIO.stopMusic();
     AUDIO.gameOver();
-
-    const overlay = this.add.rectangle(W / 2, H / 2, W, H, BRAND.purpleDeep, 0.85).setDepth(50);
-    const title = this.add.text(W / 2, H / 2 - 60, 'GAME OVER', {
+    MatterLib.Body.setVelocity(this.ball.body as any, { x: 0, y: 0 });
+    this.ball.setVisible(false);
+    const ov = this.add.rectangle(W / 2, H / 2, W, H, BRAND.purpleDeep, 0.85).setDepth(50);
+    const t1 = this.add.text(W / 2, H / 2 - 60, 'GAME OVER', {
       fontFamily: 'Press Start 2P, monospace', fontSize: '28px', color: '#FFD23F',
     }).setOrigin(0.5).setDepth(51);
-    const sub = this.add.text(W / 2, H / 2, `Final Score: ${this.score}`, {
+    const t2 = this.add.text(W / 2, H / 2, `Final Score: ${this.score}`, {
       fontFamily: 'Press Start 2P, monospace', fontSize: '14px', color: '#FFF8F0',
     }).setOrigin(0.5).setDepth(51);
-    const tag = this.add.text(W / 2, H / 2 + 40, 'PARENTS APPROVE!', {
+    const t3 = this.add.text(W / 2, H / 2 + 40, 'PARENTS APPROVE!', {
       fontFamily: 'Press Start 2P, monospace', fontSize: '10px', color: '#FF6B35',
     }).setOrigin(0.5).setDepth(51);
-    const btn = this.add.text(W / 2, H / 2 + 100, '> PRESS SPACE TO PLAY AGAIN <', {
+    const t4 = this.add.text(W / 2, H / 2 + 100, '> PRESS SPACE TO PLAY AGAIN <', {
       fontFamily: 'Press Start 2P, monospace', fontSize: '10px', color: '#00C896',
     }).setOrigin(0.5).setDepth(51);
-    this.tweens.add({ targets: btn, alpha: { from: 1, to: 0.3 }, duration: 600, yoyo: true, repeat: -1 });
-
+    this.tweens.add({ targets: t4, alpha: { from: 1, to: 0.3 }, duration: 600, yoyo: true, repeat: -1 });
     const replay = () => {
-      [overlay, title, sub, tag, btn].forEach((o) => o.destroy());
-      this.resetGame();
+      [ov, t1, t2, t3, t4].forEach((o) => o.destroy());
+      this.score = 0;
+      this.balls = 3;
+      this.modeIdx = 0;
+      this.gameOver = false;
+      this.registry.set('score', 0);
+      this.registry.set('balls', 3);
+      this.registry.set('mode', PRODUCTS[0].label);
+      this.targets.forEach((t) => {
+        t.hit = false;
+        t.rect.setFillStyle(t.product.color, 1);
+        t.rect.setStrokeStyle(2, BRAND.cream);
+      });
+      this.ball.setVisible(true);
+      this.respawn();
       AUDIO.startMusic();
     };
-    this.spaceKey.once('down', replay);
+    this.keySpace.once('down', replay);
     this.input.once('pointerdown', replay);
   }
 
-  private resetGame() {
-    this.score = 0;
-    this.ballsLeft = 3;
-    this.modeIdx = 0;
-    this.gameOver = false;
-    this.registry.set('score', 0);
-    this.registry.set('balls', 3);
-    this.registry.set('mode', PRODUCTS[0].label);
-    this.targets.forEach((t) => {
-      t.hit = false;
-      t.rect.setFillStyle(t.color, 1);
-      t.rect.setStrokeStyle(2, BRAND.cream);
-    });
-    this.ball.setVisible(true);
-    this.respawnBall();
-  }
-}
-
-function closestPointOnSegment(a: Phaser.Math.Vector2, b: Phaser.Math.Vector2, p: Phaser.Math.Vector2) {
-  const abx = b.x - a.x, aby = b.y - a.y;
-  const apx = p.x - a.x, apy = p.y - a.y;
-  const len2 = abx * abx + aby * aby || 1;
-  const t = Phaser.Math.Clamp((apx * abx + apy * aby) / len2, 0, 1);
-  return new Phaser.Math.Vector2(a.x + abx * t, a.y + aby * t);
+  private kickAudio() { AUDIO.ensure(); AUDIO.startMusic(); }
 }
