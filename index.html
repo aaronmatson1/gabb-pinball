@@ -3,55 +3,107 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
-    <title>Gabb Pinball — Safe Kids, Big Scores</title>
-    <!-- X toggles sound; Z/M/Space drive gameplay -->
-
-    <meta name="description" content="A Gabb Wireless branded pinball arcade game." />
+    <title>Gabb Pinball</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Press+Start+2P&display=swap" rel="stylesheet" />
     <style>
       :root {
-        --gabb-purple: #5B2D91;
-        --gabb-deep: #1A0B3D;
-        --gabb-coral: #FF6B35;
-        --gabb-teal: #00C896;
-        --gabb-yellow: #FFD23F;
-        --gabb-cream: #FFF8F0;
-        --gabb-pink: #FF5C8A;
+        --purple: #5B2D91;
+        --deep: #1A0B3D;
+        --coral: #FF6B35;
+        --teal: #00C896;
+        --yellow: #FFD23F;
+        --cream: #FFF8F0;
+        --pink: #FF5C8A;
       }
-      * { box-sizing: border-box; }
+      * { box-sizing: border-box; user-select: none; }
       html, body {
         margin: 0; padding: 0; height: 100%;
-        background:
-          radial-gradient(ellipse at top, #3B1A6B 0%, var(--gabb-deep) 60%, #0a0420 100%);
-        font-family: 'Fredoka', system-ui, sans-serif;
-        color: var(--gabb-cream);
+        background: radial-gradient(ellipse at top, #3B1A6B 0%, var(--deep) 60%, #0a0420 100%);
+        font-family: 'Press Start 2P', monospace;
+        color: var(--cream);
         overflow: hidden;
       }
       #app {
-        display: flex; align-items: center; justify-content: center;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
         height: 100vh; width: 100vw;
+        gap: 8px;
       }
-      #game {
-        box-shadow: 0 30px 90px rgba(0,0,0,0.6), 0 0 0 6px var(--gabb-purple),
-                    0 0 0 10px var(--gabb-yellow), 0 0 0 14px var(--gabb-coral);
+      #cabinet {
+        position: relative;
+        box-shadow: 0 30px 90px rgba(0,0,0,0.6), 0 0 0 6px var(--purple),
+                    0 0 0 10px var(--yellow), 0 0 0 14px var(--coral);
         border-radius: 14px;
         overflow: hidden;
+        background: var(--deep);
       }
-      #loading {
-        position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-        font-family: 'Press Start 2P', monospace; color: var(--gabb-yellow);
-        font-size: 14px; letter-spacing: 2px; pointer-events: none;
+      canvas { display: block; }
+      #hud {
+        position: absolute; top: 0; left: 0; right: 0;
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 10px 14px; pointer-events: none;
+        font-size: 11px; line-height: 1.2;
+        text-shadow: 1px 1px 0 #000;
       }
-      .hidden { display: none !important; }
+      #hud .left { color: var(--cream); }
+      #hud .mid { color: var(--coral); font-size: 9px; }
+      #hud .right { color: var(--teal); }
+      #title {
+        position: absolute; top: 50%; left: 0; right: 0;
+        text-align: center; color: var(--yellow); font-size: 11px;
+        transform: translateY(calc(-50vh + 16px));
+        pointer-events: none; opacity: 0; transition: opacity .3s;
+        text-shadow: 2px 2px 0 var(--coral);
+      }
+      #overlay {
+        position: absolute; inset: 0; display: none;
+        background: rgba(26,11,61,0.92);
+        flex-direction: column; align-items: center; justify-content: center;
+        gap: 16px; padding: 20px; text-align: center;
+      }
+      #overlay.show { display: flex; }
+      #overlay h1 { font-size: 28px; color: var(--yellow); margin: 0; }
+      #overlay .score { font-size: 14px; color: var(--cream); margin: 0; }
+      #overlay .tag { font-size: 10px; color: var(--coral); margin: 0; }
+      #overlay button {
+        background: var(--teal); color: var(--deep); border: 0; padding: 12px 18px;
+        font-family: inherit; font-size: 10px; cursor: pointer; border-radius: 4px;
+        box-shadow: 0 4px 0 #008f6c;
+      }
+      #overlay button:active { transform: translateY(2px); box-shadow: 0 2px 0 #008f6c; }
+      #controls {
+        position: absolute; bottom: 0; left: 0; right: 0;
+        text-align: center; font-size: 7px; color: var(--cream);
+        padding: 6px; opacity: 0.55; pointer-events: none;
+      }
+      #mute {
+        position: absolute; top: 50px; right: 14px;
+        background: transparent; color: var(--yellow); border: 0;
+        font-family: inherit; font-size: 8px; cursor: pointer;
+      }
+      #mute.muted { color: var(--pink); }
     </style>
   </head>
   <body>
     <div id="app">
-      <div id="game"></div>
+      <div id="cabinet">
+        <canvas id="game" width="540" height="860"></canvas>
+        <div id="hud">
+          <div class="left">SCORE <span id="score">0</span></div>
+          <div class="mid">GABB PINBALL</div>
+          <div class="right">BALLS <span id="balls">3</span></div>
+        </div>
+        <button id="mute">[SOUND ON]</button>
+        <div id="controls">Z / M = FLIPPERS  •  HOLD SPACE = LAUNCH  •  X = MUTE</div>
+        <div id="overlay">
+          <h1>GAME OVER</h1>
+          <p class="score">Final Score: <span id="finalScore">0</span></p>
+          <p class="tag">PARENTS APPROVE!</p>
+          <button id="replay">PLAY AGAIN</button>
+        </div>
+      </div>
     </div>
-    <div id="loading">LOADING GABB PINBALL…</div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

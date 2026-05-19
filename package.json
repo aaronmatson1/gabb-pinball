@@ -1,6 +1,6 @@
 {
   "name": "gabb-pinball",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,9 +9,10 @@
     "preview": "vite preview --port 4173"
   },
   "dependencies": {
-    "phaser": "^3.80.1"
+    "matter-js": "^0.20.0"
   },
   "devDependencies": {
+    "@types/matter-js": "^0.19.8",
     "typescript": "^5.4.5",
     "vite": "^5.2.10"
   }
