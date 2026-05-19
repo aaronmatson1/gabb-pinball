@@ -61,14 +61,16 @@ const SPAWN = { x: W - WALL - LANE_W / 2, y: H - 60 };
 const FLIPPER_PIVOT_Y = H - 130;
 const FLIPPER_SPACING = 200;                    // distance between pivots
 
-// Top quarter-circle arc — replaces the old flat diagonal deflector. The ball
-// rising out of the lane curves around this arc and enters the playfield from
-// the LEFT side. Tuned so the arc sits entirely inside the playfield and never
-// intrudes on the lane channel.
-const ARC_CENTER = { x: W - WALL, y: WALL };    // upper-right inside corner
-const ARC_RADIUS = 110;
-const ARC_THICKNESS = 30;                       // thick to prevent tunneling
-const LANE_WALL_Y_TOP = 165;                    // top of lane wall; arc starts here
+// Top quarter-circle arc — replaces the old flat diagonal deflector. Arc center
+// is INSIDE the playfield (not in the corner) so the curve concave-faces the
+// upper-right corner and convex-faces the playfield. A ball launched up the
+// lane glances off the arc and enters the playfield going down-left.
+// Built as a chain of CIRCLES so collision normals are naturally radial — no
+// axis-aligned reflection artifacts.
+const ARC_CENTER = { x: 405, y: 150 };
+const ARC_RADIUS = 100;
+const ARC_BODY_RADIUS = 12;                     // radius of each chain circle
+const LANE_WALL_Y_TOP = 175;                    // top of lane wall
 
 // ---------- helpers ----------
 const STATIC_RENDER: Record<string, { fill: string; stroke?: string; lineWidth?: number }> = {};
@@ -109,23 +111,25 @@ function buildWorld() {
     BRAND.teal,
   ));
 
-  // Quarter-circle arc at the upper-right corner. Built as a chain of short
-  // rectangles tangent to the arc curve. Each segment is thick (30 px) so a
-  // fast ball can't tunnel through. Segments are arranged from south (where
-  // the lane channel exits) to west (top of the playfield), so a launched ball
-  // curves naturally LEFT into the playable area.
-  const arcSamples = 12;
+  // Chain of CIRCLES along the quarter-arc from east (lane top, x=505) to
+  // north (top of playfield, x=405). Circles give natural radial collision
+  // normals, so the ball deflects at the local arc tangent angle. Center is in
+  // the playfield interior — concave side faces the corner, convex faces in.
+  const arcSamples = 14;
   for (let i = 0; i < arcSamples; i++) {
-    const t = (i + 0.5) / arcSamples;
-    const ang = Math.PI / 2 + t * (Math.PI / 2);   // π/2 (south) → π (west)
+    const t = i / (arcSamples - 1);
+    const ang = 0 + t * (-Math.PI / 2);            // 0 (east) → -π/2 (north)
     const x = ARC_CENTER.x + ARC_RADIUS * Math.cos(ang);
     const y = ARC_CENTER.y + ARC_RADIUS * Math.sin(ang);
-    const tangentAng = ang + Math.PI / 2;
-    const segLen = (ARC_RADIUS * (Math.PI / 2)) / arcSamples + 6; // small overlap
-    const seg = styledStatic('arc', x, y, segLen, ARC_THICKNESS, tangentAng, BRAND.coral);
-    // hide individual segment rendering — the renderer draws a smooth arc on top
-    (seg as any).__hidden = true;
-    bodies.push(seg);
+    const circle = Matter.Bodies.circle(x, y, ARC_BODY_RADIUS, {
+      isStatic: true,
+      label: 'arc',
+      friction: 0.02,
+      restitution: 0.5,
+    });
+    (circle as any).__style = { fill: hex(BRAND.coral), stroke: hex(BRAND.yellow), lineWidth: 2 };
+    (circle as any).__hidden = true;                // renderer draws smooth arc instead
+    bodies.push(circle);
   }
 
   // bottom funnels — angled walls that lead a ball coming down into the flippers.
@@ -286,8 +290,8 @@ function buildBall() {
     label: 'ball',
     density: 0.004,
     friction: 0.0005,
-    frictionAir: 0.001,
-    restitution: 0.55,
+    frictionAir: 0.0005,     // very low — pinball balls have minimal air drag
+    restitution: 0.6,
     slop: 0.02,
   });
   (ball as any).__style = { fill: hex(BRAND.cream), stroke: hex(BRAND.purpleDeep), lineWidth: 2 };
@@ -304,11 +308,10 @@ function respawnBall() {
 }
 
 function fire() {
-  const power = Math.max(state.plungerCharge, 0.55);     // 0..1
-  // matter velocities are pixels per step. Keep < arc thickness (30) to
-  // prevent tunneling. -20 to -28 px/step gets the ball reliably up to the arc
-  // even with no charge.
-  const v = -20 - power * 8;
+  const power = Math.max(state.plungerCharge, 0.6);     // 0..1
+  // -24 to -32 px/step. With arc body radius 12 (diameter 24), we stay <= 24
+  // per step to minimize tunneling.
+  const v = -24 - power * 8;
   state.ballInLane = false;
   state.plungerCharge = 0;
   state.spaceCharging = false;
@@ -532,19 +535,21 @@ function render() {
   ctx.fillText(`MODE: ${PRODUCTS[state.modeIdx].label.toUpperCase()}`, W / 2, H / 2 + 40);
   ctx.restore();
 
-  // smooth quarter-circle arc (drawn before bodies so they render on top of background)
+  // smooth quarter-circle arc — drawn as a thick stroke along the curve.
+  // Spans east (0) to north (-π/2): from lane-top down-right corner curving up
+  // to the top wall.
   ctx.save();
-  ctx.lineWidth = ARC_THICKNESS;
+  ctx.lineWidth = ARC_BODY_RADIUS * 2;
   ctx.strokeStyle = hex(BRAND.coral);
   ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.arc(ARC_CENTER.x, ARC_CENTER.y, ARC_RADIUS, Math.PI / 2, Math.PI);
+  ctx.arc(ARC_CENTER.x, ARC_CENTER.y, ARC_RADIUS, 0, -Math.PI / 2, true);
   ctx.stroke();
   // inner highlight stripe
-  ctx.lineWidth = 4;
+  ctx.lineWidth = 3;
   ctx.strokeStyle = hex(BRAND.yellow);
   ctx.beginPath();
-  ctx.arc(ARC_CENTER.x, ARC_CENTER.y, ARC_RADIUS - ARC_THICKNESS / 2 + 4, Math.PI / 2, Math.PI);
+  ctx.arc(ARC_CENTER.x, ARC_CENTER.y, ARC_RADIUS, 0, -Math.PI / 2, true);
   ctx.stroke();
   ctx.restore();
 
