@@ -67,7 +67,7 @@ const FLIPPER_SPACING = 200;                    // distance between pivots
 // lane glances off the arc and enters the playfield going down-left.
 // Built as a chain of CIRCLES so collision normals are naturally radial — no
 // axis-aligned reflection artifacts.
-const ARC_CENTER = { x: 405, y: 150 };
+const ARC_CENTER = { x: 420, y: 140 };
 const ARC_RADIUS = 100;
 const ARC_BODY_RADIUS = 12;                     // radius of each chain circle
 const LANE_WALL_Y_TOP = 175;                    // top of lane wall
