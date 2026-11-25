@@ -1,6 +1,6 @@
 # Gabb Pinball
 
-Web-based pinball arcade game branded for [Gabb Wireless](https://gabb.com). Built with Phaser 3 + Vite + TypeScript.
+Web-based pinball arcade game branded for [Gabb Wireless](https://gabb.com). Built with Matter.js + Vite + TypeScript.
 
 > Kids will be kids. Get a pinball machine that lets them.
 
